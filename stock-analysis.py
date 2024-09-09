@@ -10,6 +10,8 @@ import ta.volatility
 import ta.volume
 import yfinance as yf
 import sklearn
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import train_test_split
 import sqlite3
 from pytickersymbols import PyTickerSymbols
 from get_all_tickers import get_tickers as gt
@@ -21,6 +23,11 @@ import plotly.graph_objects as go
 import mplfinance as mpf
 import ta
 import finplot as fplt
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense,Dropout
+from sklearn.preprocessing import MinMaxScaler
+from keras.optimizers import Adam
+from keras.regularizers import l2
 
 #------------------------------------Import Libraries------------------------------------------------------------------------------
 
@@ -57,7 +64,7 @@ class Data:
         self.dividends = self.ticker.dividends
         self.recommendations = self.ticker.recommendations
 
-#------------------------------------------FEATURES--------------------------------------------------------------------------------------
+#------------------------------------------Thechnical_features--------------------------------------------------------------------------------------
 
 class Thechnical_features():
     
@@ -123,7 +130,8 @@ class Thechnical_features():
         self.market_history['Fibonacci_61.8'] = low + 0.618 * (high - low)
         self.market_history['Fibonacci_100'] = high        
     
-#-------------------------------------PLOTTING----------------------------------------------------------------------------------------------
+#----------------------------------------------------------Thechnical_features------------------------------------------------------
+#-----------------------------------------------------------------PLOTTING----------------------------------------------------------------------------------------------
 
 class Plot :
     
@@ -290,9 +298,70 @@ class Plot :
         mpf.plot(self.market_history, type='candle',addplot=ap,style=s, figsize=(40, 30), tight_layout=True, title='Candlestick Chart with Fibonacci Levels',show_nontrading=True, ylabel='Price', volume=True)
         plt.legend(loc='best')
         
+#----------------------------------------------------------------------------------------------------------------
+#---------------------------------------------------Machine Learning Model-------------------------------------------------------------
+class ML_Model:
+    def __init__(self, market_history):
+        self.market_history = market_history
+
+    def training(self):
+
+        self.market_history.dropna(inplace=True)
+        features = self.market_history[['Open', 'High', 'Low', 'Volume', 'Dividends', 'Stock Splits',
+                                        'MACD', 'MACD_Signal', 'MACD_Diff', 'RSI', 'SMA', 'SD', 'UB', 'LB',
+                                        'ema12', 'OBV', '%K', '%D', 'ATR', 'Fibonacci_23.6', 'Fibonacci_38.2',
+                                        'Fibonacci_50.0', 'Fibonacci_61.8', 'Fibonacci_100']].values
+        feature_scaler = MinMaxScaler(feature_range=(0, 1))
+        self.scaled_feature = feature_scaler.fit_transform(features)
+
+        target = self.market_history['Close'].values.reshape(-1, 1)
+        target_scaler = MinMaxScaler(feature_range=(0, 1))
+        self.scaled_target = target_scaler.fit_transform(target)
+
+        X, Y = [], []
+        time_step = 100
+        for i in range(len(features) - time_step):
+            X.append(self.scaled_feature[i:i + time_step])
+            Y.append(self.scaled_target[i + time_step])
+        X = np.array(X)
+        Y = np.array(Y)
+        X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+
+
+        model = Sequential()
+        model.add(LSTM(50, return_sequences=True, input_shape=(time_step, X.shape[2]),kernel_regularizer=l2(0.01)))
+        model.add(Dropout(0.2))
+        model.add(LSTM(50, return_sequences=False))
+        model.add(Dropout(0.2))
+        model.add(Dense(1))
+        optimizer = Adam(learning_rate=0.0001)
+        model.compile(optimizer=optimizer, loss='mean_squared_error')
+        model.fit(X_train, Y_train, epochs=100, batch_size=32, verbose=1)
+        Y_prediction = model.predict(X_test)
+        Y_prediction = target_scaler.inverse_transform(Y_prediction)
+        Y_test_actual = target_scaler.inverse_transform(Y_test)
+        
+        RMSE = np.sqrt(mean_squared_error(Y_test_actual,Y_prediction))
+        print(RMSE)
+        
+        plt.figure(figsize=(10,6))
+        plt.plot(Y_test_actual, label='Actual')
+        plt.plot(Y_prediction, label='Predicted')
+        plt.title('Actual vs Predicted Stock Prices')
+        plt.xlabel('Time')
+        plt.ylabel('Stock Price')
+        plt.legend()
+        plt.show()
+        
+        
+
+ 
+        
+        
+#---------------------------------------------------Machine Learning Model-------------------------------------------------------------
 data = Data()
 data.extract_information()
-
+#-------------------------------------------------------------------------------------------------------------------
 features = Thechnical_features(data.market_history)
 features.MACD()
 features.RSI()
@@ -302,11 +371,10 @@ features.OBV()
 features.stochastic()
 features.ATR()
 features.fibonacci()
-print(data.market_history.columns)
 
 #-------------------------------------------------------------------------------------------------------------------
 
-plotting = Plot(data.market_history)
+'''plotting = Plot(data.market_history)
 plotting.linear_plot()     
 plotting.candlestick_plot() 
 plotting.macd_plot()
@@ -315,4 +383,8 @@ plotting.bollinger_plot()
 plotting.obv_plot()
 plotting.stochastic_plot()
 plotting.ATR_plot()
-plotting.fibonaci_plot()
+plotting.fibonaci_plot()'''
+
+#-------------------------------------------------------------------------------------------------------------------------
+model = ML_Model(data.market_history)
+model.training()
