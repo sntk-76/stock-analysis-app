@@ -39,7 +39,7 @@ symbols = stocks['Symbol']
 class Data:
     
     time_period = '1y' # you can chose the time period from this list : ['1d','5d','1mo', '3mo', '6mo', '1y', '2y', '5y', '10y']
-    interval = '1d' #you can chose the time intervals from this list : ['1m','2m','5m','15m','30m','60m','90m','1h','1d','5d','1wk','1mo','3mo']
+    interval = '1d' #you can chose the time intervals from this list : ['1h','1d','5d','1wk','1mo','3mo']
     locator_dic = {'1d':[mdates.HourLocator(interval=1), mdates.DateFormatter('%H:%M')],
                    '5d':[mdates.DayLocator(),mdates.DateFormatter('%M/%d')],
                    '1mo':[mdates.WeekdayLocator(),mdates.DateFormatter('%m/%d')],
@@ -60,9 +60,7 @@ class Data:
         self.ticker = yf.Ticker(Data.market_symbol)
         self.market_info = self.ticker.info
         self.market_history = self.ticker.history(period=Data.time_period, interval=Data.interval,actions=True)
-        self.financials = self.ticker.financials
-        self.dividends = self.ticker.dividends
-        self.recommendations = self.ticker.recommendations
+        self.market_history.drop(columns=['Dividends','Stock Splits'],inplace=True)
 
 #------------------------------------------Thechnical_features--------------------------------------------------------------------------------------
 
@@ -301,58 +299,121 @@ class Plot :
 #----------------------------------------------------------------------------------------------------------------
 #---------------------------------------------------Machine Learning Model-------------------------------------------------------------
 class ML_Model:
-    def __init__(self, market_history):
-        self.market_history = market_history
+    def __init__(self, data):
+        
+        self.market_history = data.market_history
 
-    def training(self):
+    def column_prediction(self):
+        RMSE_list = []
+        selected_columns = self.market_history.columns[0:5]
+        self.prediction_df = pd.DataFrame()
+        
+        for column in selected_columns :
+            value = self.market_history[column].values.reshape(-1,1)
+            scaler = MinMaxScaler(feature_range=(0,1))
+            self.scaled_value = scaler.fit_transform(value)
+            
+            X,Y = [],[]
+            time_step = 200
+            for i in range(len(self.scaled_value)-time_step):
+                X.append(self.scaled_value[i:i+time_step])
+                Y.append(self.scaled_value[i+time_step])
+            X = np.array(X)
+            Y = np.array(Y)
+            X_train,X_test,Y_train,Y_test = train_test_split(X,Y,test_size=0.2,random_state=0)
+            
+            model = Sequential()
+            model.add(LSTM(100, return_sequences=True, input_shape=(time_step, 1)))
+            model.add(Dropout(0.1))
+            model.add(LSTM(100, return_sequences=False))
+            model.add(Dropout(0.1))
+            model.add(Dense(1))
+            optimizer = Adam(learning_rate = 0.0001)
+            model.compile(optimizer=optimizer,loss='mean_squared_error')
+            model.fit(X_train,Y_train,epochs=20,batch_size=16, verbose=1)
+            Y_prediction = model.predict(X_test)
 
+            if data.interval == ('1h') :
+                self.prediction_period = 15 
+            elif data.interval == ('1d') :
+                self.prediction_period = 12 
+            elif data.interval == ('1wk') :
+                self.prediction_period = 9 
+            elif data.interval == ('3') :
+                self.prediction_period = 6 
+                
+            
+            for i in range(self.prediction_period):
+
+                input_value = np.array(self.scaled_value[-200:]).reshape((1,time_step,1))
+                predicted_value = model.predict(input_value)
+                self.scaled_value = np.append(self.scaled_value,predicted_value.flatten()).reshape(-1,1)
+                
+            
+            predicted_list = scaler.inverse_transform(self.scaled_value[-self.prediction_period:]).tolist()
+            predicted_list = [i[0] for i in predicted_list]
+            self.prediction_df[column] = predicted_list
+            
+            
+        print(self.prediction_df)
+    
+    
+    def row_prediction(self):
+        
         self.market_history.dropna(inplace=True)
-        features = self.market_history[['Open', 'High', 'Low', 'Volume', 'Dividends', 'Stock Splits',
-                                        'MACD', 'MACD_Signal', 'MACD_Diff', 'RSI', 'SMA', 'SD', 'UB', 'LB',
-                                        'ema12', 'OBV', '%K', '%D', 'ATR', 'Fibonacci_23.6', 'Fibonacci_38.2',
-                                        'Fibonacci_50.0', 'Fibonacci_61.8', 'Fibonacci_100']].values
-        feature_scaler = MinMaxScaler(feature_range=(0, 1))
-        self.scaled_feature = feature_scaler.fit_transform(features)
-
-        target = self.market_history['Close'].values.reshape(-1, 1)
-        target_scaler = MinMaxScaler(feature_range=(0, 1))
-        self.scaled_target = target_scaler.fit_transform(target)
-
-        X, Y = [], []
-        time_step = 100
-        for i in range(len(features) - time_step):
-            X.append(self.scaled_feature[i:i + time_step])
-            Y.append(self.scaled_target[i + time_step])
+        X = self.market_history[['Open', 'High', 'Low','Volume', 'MACD', 'MACD_Signal',        
+       'MACD_Diff', 'RSI', 'SMA', 'SD', 'UB', 'LB', 'ema12', 'OBV', '%K', '%D',
+       'ATR', 'Fibonacci_23.6', 'Fibonacci_38.2', 'Fibonacci_50.0',
+       'Fibonacci_61.8', 'Fibonacci_100']]
+        Y = self.market_history['Close'].values.reshape(-1,1)
+        
+        features_scaler = MinMaxScaler(feature_range=(0,1))
+        target_scaler = MinMaxScaler(feature_range=(0,1))
+        
+        scaled_feature = features_scaler.fit_transform(X)
+        scaled_target = target_scaler.fit_transform(Y)
+        
+        X,Y = [],[]
+        time_step = 50
+        for i in range(len(self.market_history)-time_step-1):
+            
+            X.append(scaled_feature[i:i+time_step])
+            Y.append(scaled_target[i:i+time_step])
         X = np.array(X)
         Y = np.array(Y)
-        X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+        X_train,X_test,Y_train,Y_test = train_test_split(X,Y,test_size=0.2,random_state=42)
+        
+        self.rowmodel = Sequential()  
+        self.rowmodel.add(LSTM(100, return_sequences=True,input_shape=(time_step, X_train.shape[2])))
+        self.rowmodel.add(Dropout(0.1))
+        self.rowmodel.add(LSTM(100, return_sequences=True))
+        self.rowmodel.add(Dropout(0.1))
+        self.rowmodel.add(Dense(1))
+        optimizer = Adam(learning_rate = 0.001,clipvalue=1.0)
+        self.rowmodel.compile(optimizer=optimizer,loss='mean_squared_error')
+        self.rowmodel.fit(X_train,Y_train,epochs=20,batch_size=32, verbose=1)
+        Y_pred = self.rowmodel.predict(X_test)
+        rmse = np.sqrt(mean_squared_error(Y_test.reshape(-1,1), Y_pred.reshape(-1,1)))
+        print(rmse)
+            
+            
+                        
+            
+            
+                
+        
+        
+        
+        
+        
+        
+                    
 
+            
+                
+             
+            
 
-        model = Sequential()
-        model.add(LSTM(50, return_sequences=True, input_shape=(time_step, X.shape[2]),kernel_regularizer=l2(0.01)))
-        model.add(Dropout(0.2))
-        model.add(LSTM(50, return_sequences=False))
-        model.add(Dropout(0.2))
-        model.add(Dense(1))
-        optimizer = Adam(learning_rate=0.0001)
-        model.compile(optimizer=optimizer, loss='mean_squared_error')
-        model.fit(X_train, Y_train, epochs=100, batch_size=32, verbose=1)
-        Y_prediction = model.predict(X_test)
-        Y_prediction = target_scaler.inverse_transform(Y_prediction)
-        Y_test_actual = target_scaler.inverse_transform(Y_test)
-        
-        RMSE = np.sqrt(mean_squared_error(Y_test_actual,Y_prediction))
-        print(RMSE)
-        
-        plt.figure(figsize=(10,6))
-        plt.plot(Y_test_actual, label='Actual')
-        plt.plot(Y_prediction, label='Predicted')
-        plt.title('Actual vs Predicted Stock Prices')
-        plt.xlabel('Time')
-        plt.ylabel('Stock Price')
-        plt.legend()
-        plt.show()
-        
         
 
  
@@ -371,6 +432,7 @@ features.OBV()
 features.stochastic()
 features.ATR()
 features.fibonacci()
+print(data.market_history.columns)
 
 #-------------------------------------------------------------------------------------------------------------------
 
@@ -386,5 +448,8 @@ plotting.ATR_plot()
 plotting.fibonaci_plot()'''
 
 #-------------------------------------------------------------------------------------------------------------------------
-model = ML_Model(data.market_history)
-model.training()
+model = ML_Model(data)
+model.column_prediction()
+
+model = ML_Model(data)
+model.row_prediction()
